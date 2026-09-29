@@ -21,6 +21,10 @@ function runStatusline(input, env = {}, execFileSyncStub = () => '') {
   // leak into tests — only an explicit `env` override sets it.
   const mergedEnv = { ...process.env, ...env };
   if (!('COLUMNS' in env)) delete mergedEnv.COLUMNS;
+  // Same for the config dir: unset, the script falls back to the real
+  // ~/.claude, whose .claude.json would leak the developer's own account into
+  // the account segment. Point unspecified runs at a guaranteed-empty dir.
+  if (!('CLAUDE_CONFIG_DIR' in env)) mergedEnv.CLAUDE_CONFIG_DIR = emptyConfigDir();
   const context = {
     require: (name) => {
       if (name === 'child_process') return { execFileSync: execFileSyncStub };
@@ -48,6 +52,22 @@ function runStatusline(input, env = {}, execFileSyncStub = () => '') {
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cc-statusline-test-'));
+}
+
+let emptyConfigDirCache = '';
+function emptyConfigDir() {
+  if (!emptyConfigDirCache) emptyConfigDirCache = makeTempDir();
+  return emptyConfigDirCache;
+}
+
+function writeAccount(claudeDir, oauthAccount, extra = {}) {
+  // Mirror the real file: oauthAccount buried after a lot of other keys, and
+  // pretty-printed, so the locate-and-slice extraction is exercised for real.
+  const filler = {};
+  for (let i = 0; i < 200; i++) filler[`project-${i}`] = { history: ['x'.repeat(50)] };
+  const body = { projects: filler, ...extra };
+  if (oauthAccount) body.oauthAccount = oauthAccount;
+  fs.writeFileSync(path.join(claudeDir, '.claude.json'), JSON.stringify(body, null, 2));
 }
 
 function inputFor(dir, overrides = {}) {
@@ -719,6 +739,103 @@ check('cache TTL falls back to project_dir slug (not current_dir) when transcrip
     }
   }, { CLAUDE_CONFIG_DIR: claude });
   assert(text.includes('cache 99% ↓1k +10 1h:'), text);
+});
+
+check('account segment leads with the email local part on a personal plan', () => {
+  const dir = makeTempDir();
+  const claude = makeTempDir();
+  writeAccount(claude, {
+    emailAddress: 'tuzyakin@gmail.com',
+    organizationName: "tuzyakin@gmail.com's Organization",
+    organizationType: 'claude_max'
+  });
+
+  const { text } = runStatusline(inputFor(dir, { model: { display_name: 'Opus 5' } }),
+    { CLAUDE_CONFIG_DIR: claude });
+  const parts = text.split(' \u2502 ');
+  assert.strictEqual(parts[0], 'tuzyakin', text);
+  assert.strictEqual(parts[1], 'Op5', text);
+});
+
+check('account segment prefers the org name on a shared plan', () => {
+  const dir = makeTempDir();
+  for (const orgType of ['claude_team', 'claude_enterprise']) {
+    const claude = makeTempDir();
+    writeAccount(claude, {
+      emailAddress: 'a.tuzovskiy@redmadrobot.com',
+      organizationName: 'Redmadrobot',
+      organizationType: orgType
+    });
+
+    const { text } = runStatusline(inputFor(dir), { CLAUDE_CONFIG_DIR: claude });
+    assert.strictEqual(text.split(' \u2502 ')[0], 'Redmadrobot', orgType);
+  }
+});
+
+check('shared and personal accounts render in different colors', () => {
+  const dir = makeTempDir();
+  const personalDir = makeTempDir();
+  writeAccount(personalDir, { emailAddress: 'me@example.com', organizationType: 'claude_max' });
+  const teamDir = makeTempDir();
+  writeAccount(teamDir, {
+    emailAddress: 'me@corp.com', organizationName: 'Corp', organizationType: 'claude_team'
+  });
+
+  const personal = runStatusline(inputFor(dir), { CLAUDE_CONFIG_DIR: personalDir }).raw.split(' \u2502 ')[0];
+  const team = runStatusline(inputFor(dir), { CLAUDE_CONFIG_DIR: teamDir }).raw.split(' \u2502 ')[0];
+  assert(personal.startsWith('\x1b[2m'), JSON.stringify(personal));
+  assert(team.startsWith('\x1b[36m'), JSON.stringify(team));
+});
+
+check('account segment falls back to the email when a shared org has no name', () => {
+  const dir = makeTempDir();
+  const claude = makeTempDir();
+  writeAccount(claude, { emailAddress: 'lone@corp.com', organizationType: 'claude_team' });
+
+  const { text } = runStatusline(inputFor(dir), { CLAUDE_CONFIG_DIR: claude });
+  assert.strictEqual(text.split(' \u2502 ')[0], 'lone', text);
+});
+
+check('account segment stays hidden without a resolvable login', () => {
+  const dir = makeTempDir();
+  const cases = [
+    ['no config file', (c) => {}],
+    ['no oauthAccount (API key / Bedrock auth)', (c) => writeAccount(c, null)],
+    ['oauthAccount without an email', (c) => writeAccount(c, { organizationType: 'claude_max' })],
+    ['empty email', (c) => writeAccount(c, { emailAddress: '', organizationType: 'claude_max' })]
+  ];
+
+  for (const [name, setup] of cases) {
+    const claude = makeTempDir();
+    setup(claude);
+    const { text } = runStatusline(inputFor(dir, { model: { display_name: 'Opus 5' } }),
+      { CLAUDE_CONFIG_DIR: claude });
+    assert.strictEqual(text.split(' \u2502 ')[0], 'Op5', name);
+  }
+});
+
+check('account label decodes JSON escapes and shortens long names', () => {
+  const dir = makeTempDir();
+  const claude = makeTempDir();
+  writeAccount(claude, {
+    emailAddress: 'x@corp.com',
+    organizationName: 'Ren\u00e9 "Big" Industries Worldwide',
+    organizationType: 'claude_team'
+  });
+
+  const { text } = runStatusline(inputFor(dir), { CLAUDE_CONFIG_DIR: claude });
+  const label = text.split(' \u2502 ')[0];
+  assert.strictEqual(label, 'Ren\u00e9 "B\u2026rldwide', JSON.stringify(label));
+});
+
+check('a malformed account block does not break the line', () => {
+  const dir = makeTempDir();
+  const claude = makeTempDir();
+  fs.writeFileSync(path.join(claude, '.claude.json'), '{"oauthAccount": {"emailAddress": "trunc');
+
+  const { text } = runStatusline(inputFor(dir, { model: { display_name: 'Opus 5' } }),
+    { CLAUDE_CONFIG_DIR: claude });
+  assert(text.startsWith('Op5'), text);
 });
 
 if (failures.length > 0) {

@@ -6,7 +6,7 @@ A single-file Node.js statusline for Claude Code, plus three optional companion 
 
 ## Project shape
 
-- `statusline.js` — entry point. Reads JSON from stdin (model, workspace, session_id, context_window, rate_limits) and writes one ANSI-coloured line to stdout.
+- `statusline.js` — entry point. Reads JSON from stdin (model, workspace, session_id, context_window, rate_limits), plus `oauthAccount` from `$CLAUDE_CONFIG_DIR/.claude.json` for the account label, and writes one ANSI-coloured line to stdout.
 - `optional-hooks/md-sync-check.js` — SessionStart drift detector for the CLAUDE/AGENTS/GEMINI trio.
 - `optional-hooks/sync-md.js` — PostToolUse mirror: writes CLAUDE.md → AGENTS.md + GEMINI.md, swapping the `Sync:` line per file.
 - `optional-hooks/github-sync-check.js` — SessionStart git status + cached `origin` divergence + background fetch for next session.

@@ -5,15 +5,16 @@
 
 A feature-rich, single-file Node.js statusline for [Claude Code](https://claude.ai/code).
 One line at the bottom of your terminal that tells you everything you actually need:
-which model you're on, the live git state of your repo, how much context you've
-burned, your prompt-cache hit/write state, and your subscription rate limits.
+which account you're logged in under, which model you're on, the live git state of
+your repo, how much context you've burned, your prompt-cache hit/write state, and
+your subscription rate limits.
 
 No dependencies. No build step. Works on macOS, Linux, and Windows.
 
 ## Preview
 
 ```
-Op4.7:hg (1m) │ tweaks ▸ claude-…tusline (main) │ 3M 1? ↑2 push ⚠ md drift │ ██░░░ 480k/1M │ cache 87% ↓75k +360 1h:42m │ 5h:35%(2h15m) │ 7d:42%(4d)
+Acme Corp │ Op4.7:hg (1m) │ tweaks ▸ claude-…tusline (main) │ 3M 1? ↑2 push ⚠ md drift │ ██░░░ 480k/1M │ cache 87% ↓75k +360 1h:42m │ 5h:35%(2h15m) │ 7d:42%(4d)
 ```
 
 Each segment is color-coded (dim, bright, cyan, pink, green, yellow, orange, red) so the
@@ -30,6 +31,7 @@ environment variable that Claude Code exports to the script (v2.1.153+), with a 
 
 | Segment | Meaning |
 |---------|---------|
+| `Acme Corp` / `jane` | The account this session is logged in under, read from `oauthAccount` in `$CLAUDE_CONFIG_DIR/.claude.json`. Team and enterprise plans show the organisation name in **cyan**; personal plans (Max, Pro, Free) show the local part of the email in dim, because their org is auto-named `<you>'s Organization` and carries no information. This is the segment that tells a work session from a personal one when you run several logins side by side via `CLAUDE_CONFIG_DIR` — nothing else on screen names the account, and sessions that share a `settings.json` otherwise look identical. Long labels get the same 15-char `head…tail` ellipsis as the directory. Hidden when no OAuth login is stored, which is the case for API-key, Bedrock and Vertex auth |
 | `Op4.7 (1m)` | Current model, abbreviated: family (`Op`/`So`/`Ha`/`My`/`Fb`) glued to the version + context size (dim). `Opus 4.7 (1M context)` becomes `Op4.7 (1m)`, `Fable 5` becomes `Fb5`. Unrecognised model names are shown as-is. |
 | `Op4.7:hg` | Reasoning-effort tier as a lowercase code colon-glued to the model (same dim shade): `lo`/`md`/`hg`/`xhg`/`mx` for `low`/`medium`/`high`/`xhigh`/`max`. Reflects the live value (including mid-session `/effort` changes); the context size trails it — `Op4.7:hg (1m)`. Shown only on models that report `effort.level`; absent on models that don't support reasoning effort |
 | `claude-…tusline (main)` | Working directory basename (dim) + current branch in cyan; shows `(HEAD@<sha>)` in red for detached HEAD. The basename is trimmed to a 15-char `head…tail` middle ellipsis (7 chars each side) **only when the full status line would otherwise exceed the width budget** (the terminal width from `COLUMNS`, 100 columns when it's absent) — short lines keep the full name |

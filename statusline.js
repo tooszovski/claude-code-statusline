@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Claude Code Statusline
-// Shows: model | directory | git sync | context usage
+// Shows: account | model | directory | git sync | context usage
 
 const fs = require('fs');
 const path = require('path');
@@ -57,6 +57,41 @@ process.stdin.on('end', () => {
     const remaining = (rawRemaining == null || rawRemaining === '') ? NaN : Number(rawRemaining);
     const homeDir = os.homedir();
     const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(homeDir, '.claude');
+
+    // --- Account ---
+    // Which login this session runs under. Multi-account setups switch with
+    // CLAUDE_CONFIG_DIR, and nothing else on screen names the account, so two
+    // sessions that share settings.json look identical while billing to
+    // different orgs. Read the label from <claudeDir>/.claude.json.
+    //
+    // Locate the oauthAccount object and pull its fields out of a bounded slice
+    // instead of JSON.parse-ing the whole config: that file also carries the
+    // per-project history and grows into the megabytes, and this runs on every
+    // status refresh. API-key, Bedrock and Vertex auth write no oauthAccount at
+    // all, so the segment simply stays hidden there.
+    let accountLabel = '';
+    let accountShared = false;
+    try {
+      const raw = fs.readFileSync(path.join(claudeDir, '.claude.json'), 'utf8');
+      const at = raw.indexOf('"oauthAccount"');
+      if (at !== -1) {
+        const slice = raw.slice(at, at + 4096);
+        const field = (name) => {
+          const m = slice.match(new RegExp(`"${name}"\\s*:\\s*("(?:[^"\\\\]|\\\\.)*")`));
+          // The capture is a complete JSON string literal, so JSON.parse is the
+          // one correct way to unescape it (\u00e9, \", \\ and friends).
+          try { return m ? JSON.parse(m[1]) : ''; } catch (e) { return ''; }
+        };
+        const email = field('emailAddress');
+        // Personal orgs are auto-named after the email ("<you>'s Organization"),
+        // which is noise; the local part of the address is what tells two
+        // personal logins apart. Team and enterprise orgs carry a real name,
+        // and that name is the more useful label there.
+        const orgType = field('organizationType');
+        accountShared = /team|enterprise/.test(orgType);
+        accountLabel = (accountShared && field('organizationName')) || email.split('@')[0] || '';
+      }
+    } catch (e) {}
 
     const fmt = (n) => {
       if (n < 1000) return String(n);
@@ -399,7 +434,14 @@ process.stdin.on('end', () => {
       return s;
     };
     const effortSeg = effortCode ? `:${effortCode}` : '';
-    const segments = [`\x1b[2m${model.base}${effortSeg}${model.ctx}\x1b[0m`];
+    const segments = [];
+    // Shared-plan logins get the branch cyan so a work session is obvious at a
+    // glance; a personal one stays dim like the model it sits next to.
+    if (accountLabel) {
+      const color = accountShared ? '\x1b[36m' : '\x1b[2m';
+      segments.push(`${color}${shorten(accountLabel)}\x1b[0m`);
+    }
+    segments.push(`\x1b[2m${model.base}${effortSeg}${model.ctx}\x1b[0m`);
     const dirIndex = segments.length;
     segments.push(buildDirSegment(dirRaw, launchRaw));
     if (gitInfo) segments.push(gitInfo.trim());
